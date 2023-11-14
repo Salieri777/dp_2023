@@ -1,0 +1,9 @@
+complexPyTorch
+matplotlib
+numpy
+tensorboard
+tensorflow
+torch
+torchaudio
+torchvision
+tqdm
