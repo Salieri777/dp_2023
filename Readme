@@ -1,1 +1,9 @@
+运行:
 python LoRa.py
+
+文件说明:
+LoRa.py 函数入口
+models.py 定义网络结构
+lora_data.py 生成数据集
+parameter.py 定义参数
+Utils.py 工具包
