@@ -63,6 +63,18 @@ def dechirp(chirp):
 
     return max_index
 
+# resample
+def upsample(signal, factor):
+    # signal: [batch_size, CHIRP_LEN]
+    _, chirp_len = signal.shape
+    new_length = chirp_len * factor
+
+    interpolated_real = F.interpolate(signal.real.unsqueeze(1), size=new_length, mode='linear')
+    print(interpolated_real.shape)
+    interpolated_imag = F.interpolate(signal.imag.unsqueeze(1), size=new_length, mode='linear')
+    # 合并为插值后的复数信号
+    interpolated_complex_signal = torch.view_as_complex(torch.stack([interpolated_real, interpolated_imag], dim=-1))
+    return interpolated_complex_signal.squeeze(1)
 
 ## ---------------------- DL --------------------------- ##
 def positional_embedder(pos, d_embed=100):
