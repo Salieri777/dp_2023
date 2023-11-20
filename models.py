@@ -174,7 +174,7 @@ class LoRaModel(torch.nn.Module):
         self.encoder = UNet()
     
     
-    def forward(self, signals, delay_embed, sender_id, delays):
+    def forward(self, signals, delay_embed, sender_id):
         # signal: [batch_size, N_MIXER, N_FFT, N_FRAME]
         # delay_embed: [batch_size, N_MIXER, DELAY_EMB]
         # sender_id: [batch_size, N_MIXER]
@@ -195,42 +195,5 @@ class LoRaModel(torch.nn.Module):
         # mix the signals in time domain        
         time_signals = torch.istft(encoding, n_fft = N_FFT, return_complex=True).cuda()
         time_signals = time_signals.view(batch_size, N_MIXER, CHIRP_LEN)
-        
-        # for b in range(batch_size):
-        #     for i in range(N_MIXER):   
-        #         plt.specgram(time_signals[b][i].cpu().detach().numpy(), Fs=FS)   
-        #         plt.show()
-
-        mixed_signal = torch.zeros(batch_size, TOTAL_LEN, dtype=torch.complex64, requires_grad=True).cuda()
-        for b in range(batch_size):
-            for i in range(N_MIXER):
-                offset = delays[b][i]
-                mixed_signal[b][offset : offset+CHIRP_LEN] += time_signals[b][i]
-
-        # decode
-        decoded = torch.zeros(batch_size, N_MIXER, pow(2, SF), requires_grad=True).cuda()
-        dechirps = torch.zeros(batch_size, N_MIXER, CHIRP_LEN, dtype=torch.complex64, requires_grad=True).cuda()
-       
-        for b in range(batch_size):
-            for i in range(N_MIXER):   
-                offset = delays[b][i] 
-                # plt.specgram(time_signals[b][i].cpu().detach().numpy(), Fs=FS)   
-                # plt.show()
-
-                dechirps[b][i] = torch.mul(torch.conj(time_signals[b][i]), mixed_signal[b][offset : offset+CHIRP_LEN])
-                dechirps[b][i] = torch.fft.fft(dechirps[b][i])
                 
-                # plt.plot(abs(dechirps[b][i]).cpu().detach().numpy())
-                # plt.show()
-
-                max_index = torch.argmax(torch.abs(dechirps[b][i]))
-
-                if max_index >= 0 and max_index < pow(2, SF-1):
-                    decoded[b][i][max_index] = 1 
-                elif max_index < CHIRP_LEN and max_index >= (CHIRP_LEN - pow(2, SF-1)):
-                    max_index = pow(2,SF) - (round(FS/BW*pow(2,SF)) - max_index)               
-                    decoded[b][i][max_index] = 1
-                else:
-                    nn.init.constant_(decoded[b][i], 1/pow(2,SF))
-                
-        return decoded
+        return time_signals
