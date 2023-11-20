@@ -7,18 +7,20 @@ import torch.nn.functional as F
 
 ## ---------------------- LoRa ------------------------- ##
 # add noise
-def awgn(x, snr):
-    Ps = np.sum(np.power(abs(x), 2)) / np.prod(x.shape)
-    Pn = Ps / (np.power(10, snr / 10))
+def awgn(signal):
+    # 计算信号功率
+    P = torch.sum(torch.abs(signal)**2) / len(signal)
 
-    real = np.random.rand(x.shape[0])
-    imag = np.random.rand(x.shape[0])
-    z = np.zeros(shape=x.shape, dtype=complex)
-    for i in range(x.shape[0]):
-        z[i] = complex(real[i], imag[i])
-    z = z * np.sqrt(Pn)
+    # 计算噪声功率，以生成SNR为21dB
+    N = P / (10**(SNR / 10.0))
 
-    return x + z
+    # 生成噪声
+    real_noise = torch.randn_like(signal.real) * torch.sqrt(N / 2)
+    imag_noise = torch.randn_like(signal.imag) * torch.sqrt(N / 2)
+    complex_noise = torch.complex(real_noise, imag_noise)
+
+    # 将噪声添加到信号中
+    return signal + complex_noise
 
 # generate chirp
 def chirp(sf, bw, fs, begin_pos=0):
@@ -63,6 +65,7 @@ def dechirp(chirp):
 
     return max_index
 
+
 # resample
 def upsample(signal, factor):
     # signal: [batch_size, CHIRP_LEN]
@@ -76,6 +79,7 @@ def upsample(signal, factor):
     interpolated_complex_signal = torch.view_as_complex(torch.stack([interpolated_real, interpolated_imag], dim=-1))
     return interpolated_complex_signal.squeeze(1)
 
+
 ## ---------------------- DL --------------------------- ##
 def positional_embedder(pos, d_embed=100):
     # pos: [batch_size, N ,1], d_embed: 编码特征维度
@@ -88,26 +92,43 @@ def positional_embedder(pos, d_embed=100):
     pos_enc[:, :, 1::2] = torch.cos(pos * div_term)
     return pos_enc
 
-def mix(encoding, delays, total_len):
-    # encoding: [batch_size, N_MIXER, chirp_len]
+# mix the signal in time domain
+def mix(encoded_signals, delays):
+    # encoded_signals: [batch_size, N_MIXER, chirp_len]
     # delays: [batch_size, N_MIXER, 1]
-    
+    batch_size, _, _ = encoded_signals.shape
+
     # mixed_signal: [batch_size, N_MIXER, total_len]
-    batch_size, n_mixer, chirp_len = encoding.shape
+    mixed_signal = torch.zeros(batch_size, TOTAL_LEN, dtype=torch.complex64, requires_grad=True).cuda()
+    for b in range(batch_size):
+        for i in range(N_MIXER):
+            offset = delays[b][i]
+            mixed_signal[b][offset : offset+CHIRP_LEN] += encoded_signals[b][i]
 
-    mixed_signal = torch.zeros(batch_size, n_mixer, total_len, dtype=complex).cuda()
+    return awgn(mixed_signal)
 
-    t_seq = torch.arange().cuda()
+# decode the signal
+def decode(mixed_signal, encoded_signals, delays):
+    # mixed_signal: [batch_size, N_MIXER, chirp_len]
+    # encoded_signals: [batch_size, N_MIXER, chirp_len]
+    # delays: [batch_size, N_MIXER, 1]    
+    batch_size, _ = mixed_signal.shape
+    
+    dechirps = torch.zeros(batch_size, N_MIXER, CHIRP_LEN, dtype=torch.complex64, requires_grad=True).cuda()
 
     for b in range(batch_size):
-        for i in range(n_mixer):
-            offset = delays[b][i]
-            for j in range(chirp_len):
-                torch.add( )
-                mixed_signal[b][i][offset+j] += np.exp(1j * 2*np.pi * encoding[b][i][j] * j)
-    
+        for i in range(N_MIXER):   
+            offset = delays[b][i] 
+            # plt.specgram(time_signals[b][i].cpu().detach().numpy(), Fs=FS)   
+            # plt.show()
 
-    return mixed_signal
+            dechirps[b][i] = torch.mul(torch.conj(encoded_signals[b][i]), mixed_signal[b][offset : offset+CHIRP_LEN])
+            dechirps[b][i] = torch.fft.fft(dechirps[b][i])
+        
+        # plt.plot(abs(dechirps[b][i]).cpu().detach().numpy())
+        # plt.show()
+
+    return torch.abs(dechirps)
 
 def cal_predict(encoding, delays, total_len):
     # encoding: [batch_size, n, chirp_len] 编码结果
