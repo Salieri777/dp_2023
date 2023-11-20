@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 from torch.optim.lr_scheduler import ExponentialLR, MultiStepLR
 from models import *
 from torch.optim import Adam
@@ -12,45 +12,50 @@ from lora_data import *
 from parameter import *
 from Utils import *
 
-
 writer = SummaryWriter(log_dir='logs')
+batch_size = 50
+epoch = 10
+dataset = LoRaDataset()
+
+train_size = int(0.8 * len(dataset))
+test_size = len(dataset) - train_size
+train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+
+# 定义 DataLoader
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+model = LoRaModel().cuda()
+optimizer = Adam(model.parameters(), lr=6e-4)
+scheduler = ExponentialLR(optimizer, gamma=0.999)
+scheduler = MultiStepLR(optimizer, milestones=[300, 500, 700], gamma=0.5)
 
 
 def train():
-    batch_size = 2
-    dataset = LoRaDataset()
-    dataloader = DataLoader(dataset, batch_size=batch_size)
-    model = LoRaModel().cuda()
-    optimizer = Adam(model.parameters(), lr=6e-4)       # 大于7e-4就不行
-    scheduler = ExponentialLR(optimizer, gamma=0.999)
-    scheduler = MultiStepLR(optimizer, milestones=[300, 500, 700], gamma=0.5)
+    model.train(True)
 
-    pbar = tqdm(total=100)
-    for it in range(1001):
-        for signals, symbols, delays, senders in dataloader:
-            # signals: [batch_size, N, 100], delays: [batch_size, N, 1], mask: [batch_size, N, 100]
+    pbar = tqdm(total=epoch)
+    for it in range(epoch+1):
+        for signals, symbols, delays, senders in train_loader:
+            # signals: [batch_size, N, 100], delays: [batch_size, N, 1]
             signals = signals.cuda()
             symbols = symbols.cuda()
             delays = delays.cuda()
             delays_embed = positional_embedder(delays, d_embed=DELAY_EMB)
             senders = senders.cuda()
 
-            predict = model(signals, delays_embed, senders, delays)
-        
-            predict = predict.view(-1, predict.shape[-1])
+            encoded_signals = model(signals, delays_embed, senders)
+            # encoded_signals: [batch_size, N_MIXER, CHIRP_LEN]
+
+            mixed_signal = mix(encoded_signals, delays)
+
+            decode_res = decode(mixed_signal, encoded_signals, delays)
+
+            decode_res = decode_res.view(-1, decode_res.shape[-1])
             symbols = symbols.view(-1)
 
-            loss = F.cross_entropy(predict, symbols)
+            loss = F.cross_entropy(decode_res, symbols)
 
-            # for b in range(batch_size):
-            #     for i in range():
-            #     loss += F.cross_entropy(predict[b].unsqueeze(0), symbols[b].long())
-            loss /= predict.shape[0]
-
-            # predict: [batch_size, N_mixer, 1]
-
-            # loss = F.l1_loss(predict[mask], signals.flatten())
-            #loss = complex_l1_loss(predict[mask], signals.flatten())      # 实部虚部分别计算l1_loss比计算模长的l1_loss稍好
             pbar.set_description(f"loss:{loss.item():.4f}")
 
 
@@ -59,9 +64,7 @@ def train():
             optimizer.step()
         pbar.update(1)
         scheduler.step()
-        # print(predict[0][mask[0]].reshape(signals[0].shape)[0], signals[0][0])
         writer.add_scalar('Train/loss', loss.item(), it)
-        # writer.add_scalar('Train/acc', accuracy.item(), it)
         writer.add_scalar('Train/lr', optimizer.param_groups[0]['lr'], it)
 
         if it % 500 == 0:
@@ -69,6 +72,40 @@ def train():
             torch.save(model.state_dict(), f'checkpoints/ckpt_{it:05d}.pth')
     os.makedirs('checkpoints', exist_ok=True)
     torch.save(model.state_dict(), f'checkpoints/ckpt_last.pth')
+
+def evaluate():
+    model.train(False)
+
+    pbar = tqdm(total=epoch)
+    for it in range(epoch+1):
+        for signals, symbols, delays, senders in test_loader:
+            # signals: [batch_size, N, 100], delays: [batch_size, N, 1], mask: [batch_size, N, 100]
+            signals = signals.cuda()
+            symbols = symbols.cuda()
+            delays = delays.cuda()
+            delays_embed = positional_embedder(delays, d_embed=DELAY_EMB)
+            senders = senders.cuda()
+
+            encoded_signals = model(signals, delays_embed, senders)
+            # encoded_signals: [batch_size, N_MIXER, CHIRP_LEN]
+
+            mixed_signal = mix(encoded_signals, delays)
+
+            decode_res = decode(mixed_signal, encoded_signals, delays)
+
+            decode_res = decode_res.view(-1, decode_res.shape[-1])
+            symbols = symbols.view(-1)
+            _, decode_res = torch.max(decode_res, -1)
+            # 按位比较是否相等
+            elementwise_equal = torch.eq(decode_res, symbols)
+            # 计算相等的概率
+            BER = torch.mean(elementwise_equal.float())
+
+            pbar.set_description(f"Evaluate/BER:{BER.item():.4f}")
+
+
+        pbar.update(1)
+        writer.add_scalar('Evaluate/BER', BER.item(), it)
 
 
 if __name__ == '__main__':
@@ -79,4 +116,8 @@ if __name__ == '__main__':
     random.seed(seed)
     torch.backends.cudnn.deterministic = True
 
+    torch.autograd.set_detect_anomaly(True)
+
     train()
+
+    # evaluate()
