@@ -1,7 +1,7 @@
 # lora 参数
-SF = 9
+SF = 11
 BW = 125e3
-FS = 1e6
+FS = BW
 CHIRP_LEN = round(FS/BW*pow(2,SF))
 SNR = 21
 
@@ -12,7 +12,7 @@ N_DATA = 1000  # data总数
 # n_sender 发送端数量，mix_num每次随机用多少个发送端混合
 N_SENDER = 10
 N_MIXER = 3
-TOTAL_LEN = CHIRP_LEN * N_MIXER
+TOTAL_LEN = round(CHIRP_LEN * 1.05)
 
 # model 参数
 SENDER_EMB = 10
