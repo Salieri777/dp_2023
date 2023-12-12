@@ -9,7 +9,7 @@ import torch.nn.functional as F
 # add noise
 def awgn(signal):
     # 计算信号功率
-    P = torch.sum(torch.abs(signal)**2) / len(signal)
+    P = torch.sum(torch.abs(signal)**2, -1, keepdim=True) / 1
 
     # 计算噪声功率，以生成SNR为21dB
     N = P / (10**(SNR / 10.0))
@@ -69,6 +69,7 @@ def dechirp(chirp):
 # resample
 def upsample(signal, factor):
     # signal: [batch_size, CHIRP_LEN]
+    # signal: [batch_size, channel_size,siz1,size2]
     _, chirp_len = signal.shape
     new_length = chirp_len * factor
 
@@ -78,6 +79,54 @@ def upsample(signal, factor):
     # 合并为插值后的复数信号
     interpolated_complex_signal = torch.view_as_complex(torch.stack([interpolated_real, interpolated_imag], dim=-1))
     return interpolated_complex_signal.squeeze(1)
+
+def upsample4(signal, newsize3,newsize4):
+    # signal: [batch_size, channel_size,siz3,size4]
+    
+    interpolated_real = F.interpolate(signal.real, size=(newsize3,newsize4), mode='bilinear')
+    # print(interpolated_real.shape)
+    interpolated_imag = F.interpolate(signal.imag, size=(newsize3,newsize4), mode='bilinear')
+    # 合并为插值后的复数信号
+    interpolated_complex_signal = torch.view_as_complex(torch.stack([interpolated_real, interpolated_imag], dim=-1)).cuda()
+    return interpolated_complex_signal
+
+
+def max_pool_2d(signal, kernel_size):
+
+    # 假设input_tensor的shape为(batch_size, channels, height, width)
+    batch_size, channels, height, width = signal.shape
+    height=(height // kernel_size)*kernel_size
+    width=(width // kernel_size)*kernel_size
+    input_tensor = signal[:,:,0:height,0:width].abs()
+    
+    print('input_tensor',input_tensor.shape)
+
+    # 设定池化窗口大小
+    input_tensor = torch.randn(batch_size, channels, height, width)
+
+    # 将通道和空间维度合并为一个维度
+    merged_dimensions = input_tensor.view(batch_size, channels, height // kernel_size, kernel_size, width // kernel_size, kernel_size)
+    print('merged_dimensions',merged_dimensions.shape)
+
+    # 在合并的维度上进行最大化
+    max_values = torch.max(merged_dimensions, dim=3)
+    max_values = torch.max(max_values, dim=5)
+    print('max_values',max_values.shape)
+    
+
+    # 将结果重塑回原始形状
+    output_tensor = max_values.view(batch_size, channels, height // kernel_size, width // kernel_size)
+    return output_tensor
+
+    
+    
+    
+    
+    
+    
+    
+
+
 
 
 ## ---------------------- DL --------------------------- ##
@@ -105,7 +154,11 @@ def mix(encoded_signals, delays):
             offset = delays[b][i]
             mixed_signal[b][offset : offset+CHIRP_LEN] += encoded_signals[b][i]
 
-    return awgn(mixed_signal)
+    # return awgn(mixed_signal)
+    return mixed_signal
+
+def addnoise(encoded_signals):
+    return awgn(encoded_signals)
 
 # decode the signal
 def decode(mixed_signal, encoded_signals, delays):
