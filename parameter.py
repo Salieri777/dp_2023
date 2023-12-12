@@ -10,9 +10,9 @@ N_DATA = 1000  # data总数
 
 # 发送端参数
 # n_sender 发送端数量，mix_num每次随机用多少个发送端混合
-N_SENDER = 10
-N_MIXER = 3
-TOTAL_LEN = round(CHIRP_LEN * 1.05)
+N_SENDER = 100
+N_MIXER = 60
+TOTAL_LEN = round(CHIRP_LEN *4)
 
 # model 参数
 SENDER_EMB = 10
