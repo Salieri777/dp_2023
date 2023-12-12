@@ -1,17 +1,15 @@
 import torch
 from torch import nn
+
 from parameter import *
 from Utils import *
-from complexPyTorch.complexLayers import ComplexBatchNorm2d, ComplexConv2d, ComplexMaxPool2d, ComplexConvTranspose2d, ComplexReLU
+from complexPyTorch.complexLayers import ComplexBatchNorm2d, ComplexConv2d, ComplexMaxPool2d, ComplexConvTranspose2d, ComplexReLU,ComplexAvgPool2d,ComplexMaxPool2d
 from complexPyTorch.complexFunctions import complex_relu, complex_max_pool2d, complex_matmul
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 def complex_sigmoid(input):
     return F.sigmoid(input.real).type(torch.complex64)+1j*F.sigmoid(input.imag).type(torch.complex64)
-
-
-
 
 # -------------------- To Do --------------------------
 # -------------------- 对二维输入进行encoder -----------
@@ -118,36 +116,75 @@ class UNet(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.layer1 = nn.Sequential(
-            ComplexConv2d(21, 32, 1),   # 64 -> 32
+            ComplexConv2d(21, 32, kernel_size=5,stride=1,padding = 0),   # 64 -> 32
             ComplexBatchNorm2d(32),
             ComplexReLU(),
-            ComplexConv2d(32, 32, 1),
+            ComplexConv2d(32, 32, kernel_size=5,stride=1,padding = 0),
             ComplexBatchNorm2d(32),
+            ComplexReLU(),
+            # ComplexMaxPool2d(kernel_size=(2, 2), stride=(2, 2))
+        )
+        
+        self.layer3 = nn.Sequential(
+            ComplexConv2d(32, 64, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(64),
+            ComplexReLU(),
+            ComplexConv2d(64, 64, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(64),
+            ComplexReLU(),
+            # ComplexAvgPool2d(kernel_size=2)
+        )
+        self.layer5 = nn.Sequential(
+            ComplexConv2d(64, 128, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(128),
+            ComplexReLU(),
+            ComplexConv2d(128, 128, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(128),
             ComplexReLU()
         )
-        # self.layer2 = nn.Sequential(
-        #     ComplexConv2d(64, 128, 1),
-        #     ComplexBatchNorm2d(128),
-        #     ComplexReLU(),
-        #     ComplexConv2d(128, 128, 1),
-        #     ComplexBatchNorm2d(128),
-        #     ComplexReLU()
-        # )
-        # self.layer3 = nn.Sequential(
-        #     ComplexConv2d(128, 64, 1),
-        #     ComplexBatchNorm2d(64),
-        #     ComplexReLU(),
-        #     ComplexConv2d(64, 64, 1),
-        #     ComplexBatchNorm2d(64),
-        #     ComplexReLU()
-        # )
+        self.layer7 = nn.Sequential(
+            ComplexConv2d(128, 256, kernel_size=1,stride=1,padding = 0),
+            ComplexBatchNorm2d(256),
+            ComplexReLU(),
+            ComplexConv2d(256, 256, kernel_size=1,stride=1,padding = 0),
+            ComplexBatchNorm2d(256),
+            ComplexReLU()
+        )
+        self.layer8 = nn.Sequential(
+            ComplexConv2d(256, 128, kernel_size=1,stride=1,padding = 0),
+            ComplexBatchNorm2d(128),
+            ComplexReLU(),
+            ComplexConv2d(128, 128, kernel_size=1,stride=1,padding = 0),
+            ComplexBatchNorm2d(128),
+            ComplexReLU()
+        )
+        self.layer6 = nn.Sequential(
+            ComplexConv2d(256, 64, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(64),
+            ComplexReLU(),
+            ComplexConv2d(64, 64, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(64),
+            ComplexReLU()
+            # ComplexConvTranspose2d(64,64,2)
+
+        )
         self.layer4 = nn.Sequential(
-            ComplexConv2d(32, 1, 1),
+            ComplexConv2d(128, 32, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(32),
+            ComplexReLU(),
+            ComplexConv2d(32, 32, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(32),
+            ComplexReLU(),
+            # ComplexConvTranspose2d(32,32,2)
+        )
+        self.layer2 = nn.Sequential(
+            ComplexConv2d(64, 1, kernel_size=5,stride=1,padding = 0),
             ComplexBatchNorm2d(1),
             ComplexReLU(),
-            ComplexConv2d(1, 1, 1),
+            ComplexConv2d(1, 1, kernel_size=5,stride=1,padding = 0),
             ComplexBatchNorm2d(1),
             ComplexReLU()
+            
         )
 
     def forward(self, x):
@@ -155,14 +192,30 @@ class UNet(torch.nn.Module):
         # output: [batch_size*mix_num, 1+10+10, n_fft, n_frame]
 
         # [N, 21,1024,129]->[N, 64,1024,129]
-        x = self.layer1(x)
-        # layer2 = self.layer2(layer1)
-        # layer3 = self.layer3(layer2)
-        # layer4 = self.layer4(layer3)
+        
+        layer1 = self.layer1(x)
+        
+        # layer1p = max_pool_2d(layer1,2)
+        
+        layer3 = self.layer3(layer1)
+        
+        layer5 = self.layer5(layer3)
+        layer7 = self.layer7(layer5)
+        layer8 = self.layer8(layer7)
+        layer8_resize = upsample4(layer8, layer5.shape[2],layer5.shape[3])
+        layer6 = self.layer6(torch.cat([layer8_resize, layer5], dim=1))
+        layer6_resize = upsample4(layer6, layer3.shape[2],layer3.shape[3])
+        layer4 = self.layer4(torch.cat([layer6_resize, layer3], dim=1))
+        layer4_resize = upsample4(layer4, layer1.shape[2],layer1.shape[3])
+        y = self.layer2(torch.cat([layer4_resize, layer1], dim=1))
+        
+        y_resize = upsample4(y, x.shape[2],x.shape[3])
 
+
+        # layer1 = self.layer1(x)
         # [N,64,1024,129]->[N,1,1024,129]
-        x = self.layer4(x)
-        return x
+        # x = self.layer4(layer1)
+        return y_resize
 
 
 
@@ -190,6 +243,7 @@ class LoRaModel(torch.nn.Module):
         input_features = torch.cat([signals, delay_embed, sender_embedding], 2)
         input_features = input_features.reshape(batch_size*N_MIXER, 21, N_FFT, n_frame)
         encoding = self.encoder(input_features)
+        
         encoding = encoding.reshape(batch_size*N_MIXER, N_FFT, n_frame)
 
         # mix the signals in time domain        
