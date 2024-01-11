@@ -41,21 +41,23 @@ def train():
     pbar = tqdm(total=epochs)
     it = 0
     for epoch in range(epochs+1):
-        for signals, symbols, delays, senders in train_loader:
+        for signals, symbols, delays, senders, amps, probs in train_loader:
             # signals: [batch_size, N, 100], delays: [batch_size, N, 1]
             signals = signals.cuda()
             symbols = symbols.cuda()
             delays = delays.cuda()
+            amps = amps.cuda()
             delays_embed = positional_embedder(delays, d_embed=DELAY_EMB)
             senders = senders.cuda()
+            probs = probs.cuda()
 
-            encoded_signals = model(signals, delays_embed, senders)
+            encoded_signals = model(signals, delays_embed, senders, amps, probs)
             # encoded_signals: [batch_size, N_MIXER, CHIRP_LEN]
             noisedd_signals = addnoise(encoded_signals)
 
-            mixed_signal = mix(noisedd_signals, delays)
+            mixed_signal = mix(noisedd_signals, delays, amps)
 
-            decode_res = decode(mixed_signal, encoded_signals, delays)
+            decode_res = decode(mixed_signal, encoded_signals, delays, amps)
 
             decode_res = decode_res.view(-1, decode_res.shape[-1])
             symbols = symbols.view(-1)
@@ -77,17 +79,20 @@ def train():
             # eval
             if it % 5 == 0:
                 with torch.no_grad():
-                    signals, symbols, delays, senders = next(iter(test_loader))
+                    signals, symbols, delays, senders, amps, probs = next(iter(test_loader))
                     # signals: [batch_size, N, 100], delays: [batch_size, N, 1], mask: [batch_size, N, 100]
                     signals = signals.cuda()
                     symbols = symbols.cuda()
                     delays = delays.cuda()
+                    amps = amps.cuda()
+                    probs = probs.cuda()
                     delays_embed = positional_embedder(delays, d_embed=DELAY_EMB)
                     senders = senders.cuda()
-                    encoded_signals = model(signals, delays_embed, senders)
+                    encoded_signals = model(signals, delays_embed, senders, amps, probs)
+                    noisedd_signals = addnoise(encoded_signals)
                     # encoded_signals: [atch_size, N_MIXER, CHIRP_LEN]
-                    mixed_signal = mix(encoded_signals, delays)
-                    decode_res = decode(mixed_signal, encoded_signals, delays)
+                    mixed_signal = mix(noisedd_signals, delays, amps)
+                    decode_res = decode(mixed_signal, encoded_signals, delays, amps)
                     decode_res = decode_res.view(-1, decode_res.shape[-1])
                     symbols = symbols.view(-1)
                     _, decode_res = torch.max(decode_res, -1)
@@ -111,27 +116,30 @@ def train():
     plt.title('Unet Train Loss Decay')
     # plt.xlabel('batch')
     plt.ylabel('Loss')
-    plt.savefig('/data/LoRa_NN/loss_image/train_loss_b15e10skipc256len4_5015k5331.png')
+    plt.savefig('./loss_image/train_loss_SNR2NSENDER10NMIXER6NDATA100.png')
 
 def evaluate():
     model.eval()
 
     pbar = tqdm(total=epochs)
     for it in range(epochs+1):
-        for signals, symbols, delays, senders in test_loader:
+        for signals, symbols, delays, senders, amps, probs in test_loader:
             # signals: [batch_size, N, 100], delays: [batch_size, N, 1], mask: [batch_size, N, 100]
             signals = signals.cuda()
             symbols = symbols.cuda()
             delays = delays.cuda()
+            amps = amps.cuda()
+            probs = probs.cuda()
             delays_embed = positional_embedder(delays, d_embed=DELAY_EMB)
             senders = senders.cuda()
 
-            encoded_signals = model(signals, delays_embed, senders)
+            encoded_signals = model(signals, delays_embed, senders, amps, probs)
             # encoded_signals: [batch_size, N_MIXER, CHIRP_LEN]
+            noisedd_signals = addnoise(encoded_signals)
 
-            mixed_signal = mix(encoded_signals, delays)
+            mixed_signal = mix(noisedd_signals, delays, amps)
 
-            decode_res = decode(mixed_signal, encoded_signals, delays)
+            decode_res = decode(mixed_signal, encoded_signals, delays, amps)
 
             decode_res = decode_res.view(-1, decode_res.shape[-1])
             symbols = symbols.view(-1)
