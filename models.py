@@ -11,6 +11,9 @@ import matplotlib.pyplot as plt
 def complex_sigmoid(input):
     return F.sigmoid(input.real).type(torch.complex64)+1j*F.sigmoid(input.imag).type(torch.complex64)
 
+
+
+
 # -------------------- To Do --------------------------
 # -------------------- 对二维输入进行encoder -----------
 # input (signals[batch_size, n_sender, n_fft, n_frame], delay_embed[~,~,DELAY_EMB], sender_embedding[~,~,SENDER_EMB]
@@ -46,7 +49,7 @@ class UNet_v1(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.layer1 = nn.Sequential(
-            ComplexConv2d(21, 64, 3),
+            ComplexConv2d(41, 64, 3),
             ComplexBatchNorm2d(64),
             ComplexReLU(),
             ComplexConv2d(64, 64, 3),
@@ -116,7 +119,7 @@ class UNet(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.layer1 = nn.Sequential(
-            ComplexConv2d(21, 32, kernel_size=5,stride=1,padding = 0),   # 64 -> 32
+            ComplexConv2d(41, 32, kernel_size=5,stride=1,padding = 0),   # 64 -> 32
             ComplexBatchNorm2d(32),
             ComplexReLU(),
             ComplexConv2d(32, 32, kernel_size=5,stride=1,padding = 0),
@@ -202,14 +205,14 @@ class UNet(torch.nn.Module):
         layer5 = self.layer5(layer3)
         layer7 = self.layer7(layer5)
         layer8 = self.layer8(layer7)
-        layer8_resize = upsample4(layer8, layer5.shape[2],layer5.shape[3])
+        layer8_resize=upsample4(layer8, layer5.shape[2],layer5.shape[3])
         layer6 = self.layer6(torch.cat([layer8_resize, layer5], dim=1))
-        layer6_resize = upsample4(layer6, layer3.shape[2],layer3.shape[3])
+        layer6_resize=upsample4(layer6, layer3.shape[2],layer3.shape[3])
         layer4 = self.layer4(torch.cat([layer6_resize, layer3], dim=1))
-        layer4_resize = upsample4(layer4, layer1.shape[2],layer1.shape[3])
+        layer4_resize=upsample4(layer4, layer1.shape[2],layer1.shape[3])
         y = self.layer2(torch.cat([layer4_resize, layer1], dim=1))
         
-        y_resize = upsample4(y, x.shape[2],x.shape[3])
+        y_resize=upsample4(y, x.shape[2],x.shape[3])
 
 
         # layer1 = self.layer1(x)
@@ -224,24 +227,36 @@ class LoRaModel(torch.nn.Module):
         super(LoRaModel, self).__init__()
 
         self.sender_embeddings = nn.Parameter(torch.randn(N_SENDER, SENDER_EMB, dtype=torch.complex64))
+        self.amp_embeddings = nn.Parameter(torch.randn(N_AMP, AMP_EMB, dtype=torch.complex64))
+        self.prob_embeddings = nn.Parameter(torch.randn(100, PROB_EMB, dtype=torch.complex64))
         self.encoder = UNet()
     
     
-    def forward(self, signals, delay_embed, sender_id):
+    def forward(self, signals, delay_embed, sender_id, amps, probs):
         # signal: [batch_size, N_MIXER, N_FFT, N_FRAME]
         # delay_embed: [batch_size, N_MIXER, DELAY_EMB]
         # sender_id: [batch_size, N_MIXER]
         # delays: [batch_size, N_MIXER]
+        # amps: [batch_size, N_MIXER ,1]
+        # probs: [1, N_SENDER]
         batch_size, _, _, n_frame = signals.shape
         signals = signals.unsqueeze(2)      # [batch_size, N_MIXER, 1, N_FFT, N_FRAME]
-
+        amps = amps.view(1,N_MIXER)
+        prob_embed = (torch.round(probs * 100)).long()
+        prob_embed = prob_embed[0][sender_id]
+        prob_embedding = self.prob_embeddings[prob_embed]
         sender_embedding = self.sender_embeddings[sender_id]
         sender_embedding = sender_embedding[..., None, None].repeat([1,1,1,N_FFT, n_frame])    # [batch_size, N_MIXER, 10, N_FFT, N_FRAME]
         delay_embed = delay_embed[..., None, None].repeat([1,1,1,N_FFT,n_frame])              # [batch_size, N_MIXER, 10, N_FFT, N_FRAME]
+        prob_embedding = prob_embedding[..., None, None].repeat([1,1,1,N_FFT,n_frame])      # [batch_size, N_MIXER, 10, N_FFT, N_FRAME]
+        amp_embed = self.amp_embeddings[amps]
+        amp_embed = amp_embed[..., None, None].repeat([1,1,1,N_FFT,n_frame])    # [batch_size, N_MIXER, 10, N_FFT, N_FRAME]
 
         # encode the input
-        input_features = torch.cat([signals, delay_embed, sender_embedding], 2)
-        input_features = input_features.reshape(batch_size*N_MIXER, 21, N_FFT, n_frame)
+        input_features = torch.cat([signals, delay_embed, sender_embedding, amp_embed, prob_embedding], 2)
+        # input_features = torch.cat([signals, delay_embed, sender_embedding, amp_embed], 2)
+        input_features = input_features.reshape(batch_size*N_MIXER, 41, N_FFT, n_frame)
+        # input_features = input_features.reshape(batch_size * N_MIXER, 31, N_FFT, n_frame)
         encoding = self.encoder(input_features)
         
         encoding = encoding.reshape(batch_size*N_MIXER, N_FFT, n_frame)
