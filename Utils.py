@@ -79,7 +79,6 @@ def upsample(signal, factor):
     # 合并为插值后的复数信号
     interpolated_complex_signal = torch.view_as_complex(torch.stack([interpolated_real, interpolated_imag], dim=-1))
     return interpolated_complex_signal.squeeze(1)
-
 def upsample4(signal, newsize3,newsize4):
     # signal: [batch_size, channel_size,siz3,size4]
     
@@ -142,9 +141,10 @@ def positional_embedder(pos, d_embed=100):
     return pos_enc
 
 # mix the signal in time domain
-def mix(encoded_signals, delays):
+def mix(encoded_signals, delays, amps):
     # encoded_signals: [batch_size, N_MIXER, chirp_len]
     # delays: [batch_size, N_MIXER, 1]
+    # amps: [batch_size, N_MIXER, 1] 500-1000
     batch_size, _, _ = encoded_signals.shape
 
     # mixed_signal: [batch_size, N_MIXER, total_len]
@@ -152,7 +152,7 @@ def mix(encoded_signals, delays):
     for b in range(batch_size):
         for i in range(N_MIXER):
             offset = delays[b][i]
-            mixed_signal[b][offset : offset+CHIRP_LEN] += encoded_signals[b][i]
+            mixed_signal[b][offset : offset+CHIRP_LEN] += (encoded_signals[b][i] * amps[b][i]/N_AMP)
 
     # return awgn(mixed_signal)
     return mixed_signal
@@ -161,10 +161,11 @@ def addnoise(encoded_signals):
     return awgn(encoded_signals)
 
 # decode the signal
-def decode(mixed_signal, encoded_signals, delays):
+def decode(mixed_signal, encoded_signals, delays, amps):
     # mixed_signal: [batch_size, N_MIXER, chirp_len]
     # encoded_signals: [batch_size, N_MIXER, chirp_len]
-    # delays: [batch_size, N_MIXER, 1]    
+    # delays: [batch_size, N_MIXER, 1]
+    # amps: [batch_size, N_MIXER, 1]
     batch_size, _ = mixed_signal.shape
     
     dechirps = torch.zeros(batch_size, N_MIXER, CHIRP_LEN, dtype=torch.complex64, requires_grad=True).cuda()
@@ -176,7 +177,7 @@ def decode(mixed_signal, encoded_signals, delays):
             # plt.show()
 
             dechirps[b][i] = torch.mul(torch.conj(encoded_signals[b][i]), mixed_signal[b][offset : offset+CHIRP_LEN])
-            dechirps[b][i] = torch.fft.fft(dechirps[b][i])
+            dechirps[b][i] = torch.fft.fft(dechirps[b][i] / amps[b][i] * N_AMP)
         
         # plt.plot(abs(dechirps[b][i]).cpu().detach().numpy())
         # plt.show()
