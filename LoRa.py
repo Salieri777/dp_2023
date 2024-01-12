@@ -34,6 +34,10 @@ optimizer = Adam(model.parameters(), lr=6e-4)
 scheduler = ExponentialLR(optimizer, gamma=0.999)
 scheduler = MultiStepLR(optimizer, milestones=[300, 500, 700], gamma=0.5)
 
+# 定义早停止的条件
+patience = 3  # 连续多少个epochs验证集性能不再提升时停止
+best_val_loss = float('inf')
+current_patience = 0
 
 def train():
     model.train()
@@ -96,6 +100,22 @@ def train():
                     decode_res = decode_res.view(-1, decode_res.shape[-1])
                     symbols = symbols.view(-1)
                     _, decode_res = torch.max(decode_res, -1)
+
+                    val_loss = F.cross_entropy(decode_res, symbols).cuda()
+
+                     # 保存最佳模型
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                        torch.save(model.state_dict(), 'best_model.pth')
+                        current_patience = 0
+                    else:
+                        current_patience += 1
+
+                    # 检查早停止条件
+                    if current_patience >= patience:
+                        print(f'Early stopping after {epoch + 1} epochs.')
+                        break
+
                     # 按位比较是否相等
                     elementwise_equal = torch.eq(decode_res, symbols)
                     # 计算相等的概率
