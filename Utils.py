@@ -141,7 +141,8 @@ def positional_embedder(pos, d_embed=100):
     return pos_enc
 
 # mix the signal in time domain
-def mix(encoded_signals, delays, amps):
+def mix(symbols, encoded_signals, delays, amps):
+    # symbols: [batch_size, N_MiXER, 1] [0, 2^SF)
     # encoded_signals: [batch_size, N_MIXER, chirp_len]
     # delays: [batch_size, N_MIXER, 1]
     # amps: [batch_size, N_MIXER, 1] 500-1000
@@ -152,13 +153,18 @@ def mix(encoded_signals, delays, amps):
     for b in range(batch_size):
         for i in range(N_MIXER):
             offset = delays[b][i]
-            mixed_signal[b][offset : offset+CHIRP_LEN] += (encoded_signals[b][i] * amps[b][i]/N_AMP)
+            pos = symbols[b][i].item()
+            tmp = torch.cat((encoded_signals[b][i][pos:], encoded_signals[b][i][:pos]))
+
+            mixed_signal[b][offset : offset+CHIRP_LEN] += (tmp * amps[b][i]/N_AMP)
 
     # return awgn(mixed_signal)
     return mixed_signal
 
+# ------------------- To Do ---------------------------
 def addnoise(encoded_signals):
-    return awgn(encoded_signals)
+    return encoded_signals
+    # return awgn(encoded_signals)
 
 # decode the signal
 def decode(mixed_signal, encoded_signals, delays, amps):
