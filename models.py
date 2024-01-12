@@ -241,7 +241,7 @@ class LoRaModel(torch.nn.Module):
         # probs: [1, N_SENDER]
         batch_size, _, _, n_frame = signals.shape
         signals = signals.unsqueeze(2)      # [batch_size, N_MIXER, 1, N_FFT, N_FRAME]
-        amps = amps.view(1,N_MIXER)
+        amps = amps.view(batch_size, N_MIXER)
         prob_embed = (torch.round(probs * 100)).long()
         prob_embed = prob_embed[0][sender_id]
         prob_embedding = self.prob_embeddings[prob_embed]
