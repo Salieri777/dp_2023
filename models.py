@@ -119,7 +119,7 @@ class UNet(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.layer1 = nn.Sequential(
-            ComplexConv2d(41, 32, kernel_size=5,stride=1,padding = 0),   # 64 -> 32
+            ComplexConv2d(1+DELAY_EMB+SENDER_EMB+AMP_EMB+PROB_EMB+SYMBOL_EMB, 32, kernel_size=5,stride=1,padding = 0),
             ComplexBatchNorm2d(32),
             ComplexReLU(),
             ComplexConv2d(32, 32, kernel_size=5,stride=1,padding = 0),
@@ -221,18 +221,19 @@ class UNet(torch.nn.Module):
         return y_resize
 
 
-
 class LoRaModel(torch.nn.Module):
     def __init__(self):
         super(LoRaModel, self).__init__()
 
+        self.symbol_embeddings = nn.Parameter(torch.randn(pow(2, SF), SYMBOL_EMB, dtype=torch.complex64))
         self.sender_embeddings = nn.Parameter(torch.randn(N_SENDER, SENDER_EMB, dtype=torch.complex64))
-        self.amp_embeddings = nn.Parameter(torch.randn(N_AMP, AMP_EMB, dtype=torch.complex64))
+        self.amp_embeddings = nn.Parameter(torch.randn(A_HIGH, AMP_EMB, dtype=torch.complex64))
         self.prob_embeddings = nn.Parameter(torch.randn(100, PROB_EMB, dtype=torch.complex64))
         self.encoder = UNet()
     
     
-    def forward(self, signals, delay_embed, sender_id, amps, probs):
+    def forward(self, symbols, signals, delay_embed, sender_id, amps, probs):
+        # symbols: [batch_size, N_MIXER, 1]
         # signal: [batch_size, N_MIXER, N_FFT, N_FRAME]
         # delay_embed: [batch_size, N_MIXER, DELAY_EMB]
         # sender_id: [batch_size, N_MIXER]
@@ -246,16 +247,164 @@ class LoRaModel(torch.nn.Module):
         prob_embed = prob_embed[0][sender_id]
         prob_embedding = self.prob_embeddings[prob_embed]
         sender_embedding = self.sender_embeddings[sender_id]
+
         sender_embedding = sender_embedding[..., None, None].repeat([1,1,1,N_FFT, n_frame])    # [batch_size, N_MIXER, 10, N_FFT, N_FRAME]
         delay_embed = delay_embed[..., None, None].repeat([1,1,1,N_FFT,n_frame])              # [batch_size, N_MIXER, 10, N_FFT, N_FRAME]
         prob_embedding = prob_embedding[..., None, None].repeat([1,1,1,N_FFT,n_frame])      # [batch_size, N_MIXER, 10, N_FFT, N_FRAME]
         amp_embed = self.amp_embeddings[amps]
         amp_embed = amp_embed[..., None, None].repeat([1,1,1,N_FFT,n_frame])    # [batch_size, N_MIXER, 10, N_FFT, N_FRAME]
 
+        symbols = symbols.view(batch_size, N_MIXER)
+        symbol_embed = self.symbol_embeddings[symbols]
+        symbol_embed = symbol_embed[..., None, None].repeat([1,1,1,N_FFT,n_frame])
+
         # encode the input
-        input_features = torch.cat([signals, delay_embed, sender_embedding, amp_embed, prob_embedding], 2)
-        # input_features = torch.cat([signals, delay_embed, sender_embedding, amp_embed], 2)
-        input_features = input_features.reshape(batch_size*N_MIXER, 41, N_FFT, n_frame)
+        input_features = torch.cat([signals, delay_embed, sender_embedding, amp_embed, prob_embedding, symbol_embed], 2)
+        input_features = input_features.reshape(batch_size*N_MIXER, 1+DELAY_EMB+SENDER_EMB+AMP_EMB+PROB_EMB+SYMBOL_EMB, N_FFT, n_frame)
+
+        # input_features = torch.cat([signals, delay_embed, sender_embedding, amp_embed, prob_embedding], 2)
+        # input_features = input_features.reshape(batch_size*N_MIXER, 1+DELAY_EMB+SENDER_EMB+AMP_EMB+PROB_EMB, N_FFT, n_frame)
+        # input_features = input_features.reshape(batch_size * N_MIXER, 31, N_FFT, n_frame)
+        encoding = self.encoder(input_features)
+        
+        encoding = encoding.reshape(batch_size*N_MIXER, N_FFT, n_frame)
+
+        # mix the signals in time domain        
+        time_signals = torch.istft(encoding, n_fft = N_FFT, return_complex=True).cuda()
+        time_signals = time_signals.view(batch_size, N_MIXER, CHIRP_LEN)
+                
+        return time_signals
+
+class UNet_without(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layer1 = nn.Sequential(
+            ComplexConv2d(1, 32, kernel_size=5,stride=1,padding = 0),
+            ComplexBatchNorm2d(32),
+            ComplexReLU(),
+            ComplexConv2d(32, 32, kernel_size=5,stride=1,padding = 0),
+            ComplexBatchNorm2d(32),
+            ComplexReLU(),
+            # ComplexMaxPool2d(kernel_size=(2, 2), stride=(2, 2))
+        )
+        
+        self.layer3 = nn.Sequential(
+            ComplexConv2d(32, 64, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(64),
+            ComplexReLU(),
+            ComplexConv2d(64, 64, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(64),
+            ComplexReLU(),
+            # ComplexAvgPool2d(kernel_size=2)
+        )
+        self.layer5 = nn.Sequential(
+            ComplexConv2d(64, 128, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(128),
+            ComplexReLU(),
+            ComplexConv2d(128, 128, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(128),
+            ComplexReLU()
+        )
+        self.layer7 = nn.Sequential(
+            ComplexConv2d(128, 256, kernel_size=1,stride=1,padding = 0),
+            ComplexBatchNorm2d(256),
+            ComplexReLU(),
+            ComplexConv2d(256, 256, kernel_size=1,stride=1,padding = 0),
+            ComplexBatchNorm2d(256),
+            ComplexReLU()
+        )
+        self.layer8 = nn.Sequential(
+            ComplexConv2d(256, 128, kernel_size=1,stride=1,padding = 0),
+            ComplexBatchNorm2d(128),
+            ComplexReLU(),
+            ComplexConv2d(128, 128, kernel_size=1,stride=1,padding = 0),
+            ComplexBatchNorm2d(128),
+            ComplexReLU()
+        )
+        self.layer6 = nn.Sequential(
+            ComplexConv2d(256, 64, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(64),
+            ComplexReLU(),
+            ComplexConv2d(64, 64, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(64),
+            ComplexReLU()
+            # ComplexConvTranspose2d(64,64,2)
+
+        )
+        self.layer4 = nn.Sequential(
+            ComplexConv2d(128, 32, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(32),
+            ComplexReLU(),
+            ComplexConv2d(32, 32, kernel_size=3,stride=1,padding = 0),
+            ComplexBatchNorm2d(32),
+            ComplexReLU(),
+            # ComplexConvTranspose2d(32,32,2)
+        )
+        self.layer2 = nn.Sequential(
+            ComplexConv2d(64, 1, kernel_size=5,stride=1,padding = 0),
+            ComplexBatchNorm2d(1),
+            ComplexReLU(),
+            ComplexConv2d(1, 1, kernel_size=5,stride=1,padding = 0),
+            ComplexBatchNorm2d(1),
+            ComplexReLU()
+            
+        )
+
+    def forward(self, x):
+        # input: [batch_size*mix_num, 1+10+10, n_fft, n_frame]      [1signal + 10delay_embed + 10sender_embed]
+        # output: [batch_size*mix_num, 1+10+10, n_fft, n_frame]
+
+        # [N, 21,1024,129]->[N, 64,1024,129]
+        
+        layer1 = self.layer1(x)
+        
+        # layer1p = max_pool_2d(layer1,2)
+        
+        layer3 = self.layer3(layer1)
+        
+        layer5 = self.layer5(layer3)
+        layer7 = self.layer7(layer5)
+        layer8 = self.layer8(layer7)
+        layer8_resize=upsample4(layer8, layer5.shape[2],layer5.shape[3])
+        layer6 = self.layer6(torch.cat([layer8_resize, layer5], dim=1))
+        layer6_resize=upsample4(layer6, layer3.shape[2],layer3.shape[3])
+        layer4 = self.layer4(torch.cat([layer6_resize, layer3], dim=1))
+        layer4_resize=upsample4(layer4, layer1.shape[2],layer1.shape[3])
+        y = self.layer2(torch.cat([layer4_resize, layer1], dim=1))
+        
+        y_resize=upsample4(y, x.shape[2],x.shape[3])
+
+
+        # layer1 = self.layer1(x)
+        # [N,64,1024,129]->[N,1,1024,129]
+        # x = self.layer4(layer1)
+        return y_resize
+
+
+class LoRaModel_without(torch.nn.Module):
+    def __init__(self):
+        super(LoRaModel_without, self).__init__()
+
+        self.encoder = UNet_without()
+    
+    
+    def forward(self, symbols, signals, delay_embed, sender_id, amps, probs):
+        # symbols: [batch_size, N_MIXER, 1]
+        # signal: [batch_size, N_MIXER, N_FFT, N_FRAME]
+        # delay_embed: [batch_size, N_MIXER, DELAY_EMB]
+        # sender_id: [batch_size, N_MIXER]
+        # delays: [batch_size, N_MIXER]
+        # amps: [batch_size, N_MIXER ,1]
+        # probs: [1, N_SENDER]
+        batch_size, _, _, n_frame = signals.shape
+        signals = signals.unsqueeze(2)      # [batch_size, N_MIXER, 1, N_FFT, N_FRAME]
+
+        # encode the input
+        input_features = signals
+        input_features = input_features.reshape(batch_size*N_MIXER, 1, N_FFT, n_frame)
+
+        # input_features = torch.cat([signals, delay_embed, sender_embedding, amp_embed, prob_embedding], 2)
+        # input_features = input_features.reshape(batch_size*N_MIXER, 1+DELAY_EMB+SENDER_EMB+AMP_EMB+PROB_EMB, N_FFT, n_frame)
         # input_features = input_features.reshape(batch_size * N_MIXER, 31, N_FFT, n_frame)
         encoding = self.encoder(input_features)
         
